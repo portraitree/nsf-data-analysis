@@ -1,6 +1,6 @@
 # nsf-data-analysis
 
-A more detailed description of the 2 .Rmd files can be found in the file's "Author's Notes". For more information on the project itself, please see the Introduction to the NSF Data Cleaning file.
+For more information on the project itself, please see the Introduction to the NSF Data Cleaning file.
 
 ### File descriptions:
 * 1955-present_formatted.csv: A .csv consisting of all NSF GFRP grant awardees from 1955-2023.
