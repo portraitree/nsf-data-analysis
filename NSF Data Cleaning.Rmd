@@ -1,0 +1,531 @@
+---
+title: "NSF Graduate Research Fellowships Program (GFRP) Data Cleaning"
+output: pdf_document
+author: "Natalie Sarabosing (in collaboration with Elliot Buera, Amanda Lu, Krish Mawalkar, Shirley Xiang, and Kyu Min Park)"
+date: "2023-12-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Loading in R libaries
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(tidyr)
+library(stringdist)
+```
+
+### Author's Notes: 
+This .Rmd file will take around 20 minutes to run in its entirety due to all of the for loops. Because of this, **I've set eval = FALSE in the largest code chunks**, which means running the whole program from top to bottom will not clean the data (and will result in an error somewhere). If you'd like *to test out the code* to see how it works, feel free to change eval = TRUE. If you're looking to work with the cleaned version of the data, I'd recommend just referring to the resulting .csv file, and not running this entire program from scratch. 
+
+This document is the result of a semester's worth of collaborative work from the Early Undergraduate Research in Statistics course (36-297). Since the objective of the course was to give each student experience with working with R, we all worked independently on the same task and would compare methods and share code each week. Though this is the file that I personally ended up using to clean the dataset, much of this process and our ideas came about through collaboration with my fellow students (listed above), and distinct credit for work is listed wherever possible. In that vein, to start off this document, I'd like to thank Krish Malwalkar for writing the majority of the Introduction and Data Processing blurbs.
+
+### Introduction
+
+This report covers the National Science Foundation's Graduate Research Fellowship Program (GRFP) [link](https://www.nsfgrfp.org/contact/about-grfp/). The purpose of the NSF GRFP is to promote science and engineering in the United States. The program includes a wide variety of STEM fields and supports research-based master's and doctoral degrees at accredited United States institutions.
+
+As the GRFP is the oldest graduate fellowship of its kind, it has a long history. Past fellows include Nobel Prize winners, Google founder Sergey Brin, and former U.S. Secretary of Energy, Steven Chu. One can apply for the program twice (in the senior year of an undergraduate program to cover research or in 1-2 years)
+
+Our client, Carnegie Mellon University Libraries, acts as a Science and Engineering Liaison for chemistry, materials science, and other programs at Carnegie Mellon. The primary dataset [(link)](https://www.research.gov/grfp/AwardeeList.do?method=loadAwardeeList
+) is used to investigate factors contributing to being awarded an GRFP grant. To work with the data, we manually downloaded the records of grant award winners from the GRFP site and compiled them into one .csv file. We also manually added in the year in which each winner received their award.
+
+Key issues of the data include:
+
+* No standardization of data entries (all capital entries, hyphenated university names) leading to inconsistency.
+* Assessing data from a wide range of time, so how far back should we go?
+
+Goals include:
+
+* Understanding which fields are getting more awards
+* Does authoring papers increase the likelihood of awards (and other metrics)?
+* Does the data look different decades ago? What changed in the characteristics of NSF GRFP recipients over time?
+
+### Data Processing
+
+To begin the processing of the data, we describe the variables involved in the overall dataset. We utilize the NSF data from 1955 to 2023 which contains the following:
+
+* Year - the year the grant was awarded
+* Award Type - whether the award was given (recorded as 'Offered Award' for every entry we analyze)
+* Name
+* Bacculaureate Institution - the undergraduate college the NSF GRFP awardee attended
+* Field of Study - the area of student
+* Current Institution - the institution the student currently attends/will attend for their master's or doctorate degree sponsored by the NSF GREP.
+
+**Data Cleaning**
+
+As the year, award type, and name are already formatted, we focus on the Baccalaureate Institution, Field of Study, and Current Institution variables. The main data cleaning challenge is that these three variables are entered manually by the user, leading to inconsistencies in report. Our general data cleaning process was the following:
+
+* Doing an initial word standardization (string manipulation) of Baccalaureate and Current Institutions using gsub()
+* Fuzzy matching Baccalaureate and Current Institutions to a list of US colleges and universities (via the Jaro-Winkler distance), and also tracking which state each school is from
+* Manually correcting the most common fuzzy matching school name errors
+
+```{r}
+# Reading in our compiled, cleaned csv
+# This specific .csv of the dataset was cleaned/filtered by Amanda Lu
+nsf <- read.csv("nsf_fully_cleaned_11-30_2.csv")
+colnames(nsf)
+```
+
+The following code does a surface-level cleaning of the institution names in the data.
+
+```{r}
+# Code credits to Elliot Buera
+nsf$Baccalaureate_Institution = tolower(nsf$Baccalaureate_Institution)
+
+nsf$Baccalaureate_Institution = str_to_title(nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = tolower(nsf$Current_Institution)
+
+nsf$Current_Institution = str_to_title(nsf$Current_Institution)
+
+nsf$Baccalaureate_Institution = gsub("Of", "of", nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = gsub("Of", "of", nsf$Current_Institution)
+
+nsf$Baccalaureate_Institution = gsub("At", "at", nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = gsub("At", "at", nsf$Current_Institution)
+
+nsf$Baccalaureate_Institution = gsub("And", "and", nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = gsub("And", "and", nsf$Current_Institution)
+
+nsf$Baccalaureate_Institution = gsub("&", " and ", nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = gsub("&", " and ", nsf$Current_Institution)
+
+nsf$Baccalaureate_Institution = gsub("Univ ", "University ", nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = gsub("Univ ", "University", nsf$Current_Institution)
+
+nsf$Baccalaureate_Institution = gsub("U ", "University ", nsf$Baccalaureate_Institution)
+
+nsf$Current_Institution = gsub("U ", "University", nsf$Current_Institution)
+```
+
+To prepare for the fuzzy matching of Baccalaureate and Current Institution names (and to match institutions to their respective states), we ran the following code chunk: 
+
+```{r}
+# Code credits: Natalie Sarabosing
+
+# Reading in a list of colleges and states to match with
+# Source: https://public.opendatasoft.com/explore/dataset/us-colleges-and-universities/table/?flg=en-us
+college_list <- read.csv("us-colleges-and-universities (1).csv")
+college_names <- college_list$NAME
+college_state <- college_list$STATE
+
+# Creating a new column to put the matched school names
+nsf$New_BI <- "N/A" # Baccalaureate Institution
+nsf$BI_State <- "N/A"
+
+nsf$New_CI <- "N/A" # Current Institution
+nsf$CI_State <- "N/A"
+
+# Reordering the columns
+nsf <- nsf[, c("Year", "Award_Type", "Name", "Baccalaureate_Institution", "New_BI", "CI_State", "Field_of_Study", "Current_Institution", "New_CI", "CI_State")]
+
+# Getting rid of NAs in the Year column (due to an issue in data extraction)
+nsf <- nsf %>% drop_na(Year)
+
+# Converting to uppercase to aid in fuzzy matching
+nsf$Baccalaureate_Institution <- toupper(nsf$Baccalaureate_Institution)
+nsf$Current_Institution <- toupper(nsf$Current_Institution)
+```
+
+We then performed the data cleaning through two for loops, as follows. 
+
+```{r, eval = FALSE}
+# Code credits: Natalie Sarabosing, adapted from Professor Freeman and Amanda Lu
+
+# Fuzzy matching Baccalaureate Institutions
+suppressWarnings({
+    
+for (i in 1:length(nsf$Baccalaureate_Institution)) {
+  if(!is.na(nsf$Baccalaureate_Institution[i]) &&
+          nsf$Baccalaureate_Institution[i] != "" &&
+          nsf$Baccalaureate_Institution[i] != "N/A") {
+
+    sd <- stringdist(college_names,nsf$Baccalaureate_Institution[i],method="jw") # Jaro-Winkler Distance
+    o <- order(sd)
+    result <- college_names[o[1]]
+    nsf$New_BI[i] <- result
+
+    name_index = which(grepl(paste("^",result,"$",  sep = ""), college_list$NAME))
+    if(length(name_index) == 1) {
+      nsf$BI_State[i] <- college_state[name_index]
+    }
+  }
+}
+})
+
+```
+
+```{r,eval = FALSE}
+# Code credits: Natalie Sarabosing
+
+# Fuzzy matching Current Institutions
+suppressWarnings({
+
+for (i in 1:length(nsf$Current_Institution)) {
+  if(!is.na(nsf$Current_Institution[i]) &&
+          nsf$Current_Institution[i] != "" &&
+          nsf$Current_Institution[i] != "N/A") {
+
+    sd <- stringdist(college_names,nsf$Current_Institution[i],method="jw") # Jaro-Winkler Distance
+    o <- order(sd)
+    result <- college_names[o[1]]
+    nsf$New_CI[i] <- result
+
+    name_index = which(grepl(paste("^",result,"$",  sep = ""), college_list$NAME))
+    nsf$CI_State[i] <- college_state[name_index]
+  }
+}
+})
+```
+
+The preliminary results of the fuzzy matching data were then saved into a .csv file. 
+
+```{r}
+# Code credits: Natalie Sarabosing
+
+# Reorganizing the columns
+nsf <- nsf[, c("Year", "Award_Type", "Name", "Baccalaureate_Institution", "New_BI", "BI_State", "Field_of_Study", "Current_Institution", "New_CI", "CI_State")]
+head(nsf)
+
+# "Saving" the progress
+write.csv(nsf, "fuzzy_matched_but_errors2.csv", row.names=FALSE)
+```
+
+```{r}
+# Creating new dataframes for comparison during manually fixing schools
+fuzzy_original2 <- read.csv("fuzzy_matched_but_errors2.csv")
+fuzzy_fixes <- read.csv("fuzzy_matched_but_errors2.csv")
+```
+
+Upon further analysis of the fuzzy matching dataset, it became very clear that the resulting fuzzy matching dataset resulted in many discrepancies (i.e. an "updated" Baccalaureate Institution name did not match the state it was assigned to, or the "updated" school was clearly different from the original institution), which were then mostly corrected by manual fixes in the following 2 for loops. 
+
+```{r, eval = FALSE}
+# Code credits: Natalie Sarabosing
+
+# Manually fixing errors in New_BI and BI_State
+suppressWarnings({
+  
+for (i in 1:length(nsf$Baccalaureate_Institution)) {
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "COLUMBIA UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "COLUMBIA UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "NY"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF WASHINGTON") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF WASHINGTON"
+    fuzzy_fixes$BI_State[i] = "WA"
+  }
+
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "REGENTS OF THE UNIVERSITY OF MICHIGAN - ANN ARBOR") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF MICHIGAN-ANN ARBOR"
+    fuzzy_fixes$BI_State[i] = "MI"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF MICHIGAN") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF MICHIGAN"
+    fuzzy_fixes$BI_State[i] = "MI"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF TEXAS AT SAN ANTONIO") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF TEXAS AT SAN ANTONIO"
+    fuzzy_fixes$BI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF TENNESSEE KNOXVILLE") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF TENNESSEE-KNOXVILLE"
+    fuzzy_fixes$BI_State[i] = "TN"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF TEXAS RIO GRANDE VALLEY") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF TEXAS-RIO GRANDE VALLEY"
+    fuzzy_fixes$BI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF TEXAS AT AUSTIN") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF TEXAS-AUSTIN"
+    fuzzy_fixes$BI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "GEORGIA INSTITUTE OF TECHNOLOGY") {
+    fuzzy_fixes$New_BI[i] = "GEORGIA INSTITUTE OF TECHNOLOGY"
+    fuzzy_fixes$BI_State[i] = "GA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "TRUSTEES OF BOSTON UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "BOSTON UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "HARVARD COLLEGE, PRESIDENT  AND  FELLOWS OF") {
+    fuzzy_fixes$New_BI[i] = "HARVARD COLLEGE"
+    fuzzy_fixes$BI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF HAWAII") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF HAWAII"
+    fuzzy_fixes$BI_State[i] = "HI"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "WILLIAM MARSH RICE UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "RICE UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "WASHINGTON UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "WASHINGTON UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "OHIO STATE UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "OHIO STATE UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "OH"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "TULANE UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "TULANE UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "LA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "CAMBRIDGE UNIVERSITY") {
+    fuzzy_fixes$New_BI[i] = "CAMBRIDGE UNIVERSITY"
+    fuzzy_fixes$BI_State[i] = "N/A"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "COLLEGE OF WILLIAM AND MARY") {
+    fuzzy_fixes$New_BI[i] = "COLLEGE OF WILLIAM AND MARY"
+    fuzzy_fixes$BI_State[i] = "VA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "UNIVERSITY OF VIRGINIA") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF VIRGINIA"
+    fuzzy_fixes$BI_State[i] = "VA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "NANJING ENGINEERING COLLEGE/CHINA") {
+    fuzzy_fixes$New_BI[i] = "NANJING ENGINEERING COLLEGE-CHINA"
+    fuzzy_fixes$BI_State[i] = "N/A"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "U OF CHICAGO/IL") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF CHICAGO"
+    fuzzy_fixes$BI_State[i] = "IL"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "U OF NOTRE DAME/IN") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF NOTRE DAME"
+    fuzzy_fixes$BI_State[i] = "IN"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "U OF TEXAS-AUSTIN") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF TEXAS-AUSTIN"
+    fuzzy_fixes$BI_State[i] = "OH"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "NSHE BOARD OF REGENTS ON BEHALF OF NEVADA STATE COLLEGE") {
+    fuzzy_fixes$New_BI[i] = "NEVADA STATE COLLEGE"
+    fuzzy_fixes$BI_State[i] = "NV"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "BOARD OF REGENTS, NSHE, OBO UNIVERSITY OF NEVADA, RENO") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF NEVADA"
+    fuzzy_fixes$BI_State[i] = "NV"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "U OF WASHINGTON") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF WASHINGTON"
+    fuzzy_fixes$BI_State[i] = "WA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "RADCLIFFE COLLEGE/MA") {
+    fuzzy_fixes$New_BI[i] = "RADCLIFFE COLLEGE"
+    fuzzy_fixes$BI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "U OF UTAH") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF UTAH"
+    fuzzy_fixes$BI_State[i] = "UT"
+  }
+  
+  if(fuzzy_fixes$Baccalaureate_Institution[i] == "ARIZONA, UNIVERSITY OF") {
+    fuzzy_fixes$New_BI[i] = "UNIVERSITY OF ARIZONA"
+    fuzzy_fixes$BI_State[i] = "AZ"
+  }
+  
+  }
+})
+
+```
+
+```{r, eval = FALSE}
+# Manually fixing errors in New_CI and CI_State (same code as above)
+
+suppressWarnings({
+
+for (i in 1:length(nsf$Current_Institution)) {
+  if(!is.na(nsf$Current_Institution[i]) &&
+          nsf$Current_Institution[i] != "" &&
+          nsf$Current_Institution[i] != "N/A") {
+    
+  if(fuzzy_fixes$Current_Institution[i] == "COLUMBIA UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "COLUMBIA UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "NY"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF WASHINGTON") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF WASHINGTON"
+    fuzzy_fixes$CI_State[i] = "WA"
+  }
+
+  if(fuzzy_fixes$Current_Institution[i] == "REGENTS OF THE UNIVERSITY OF MICHIGAN - ANN ARBOR") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF MICHIGAN-ANN ARBOR"
+    fuzzy_fixes$CI_State[i] = "MI"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF MICHIGAN") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF MICHIGAN"
+    fuzzy_fixes$CI_State[i] = "MI"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF TEXAS AT SAN ANTONIO") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF TEXAS AT SAN ANTONIO"
+    fuzzy_fixes$CI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF TENNESSEE KNOXVILLE") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF TENNESSEE-KNOXVILLE"
+    fuzzy_fixes$CI_State[i] = "TN"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF TEXAS RIO GRANDE VALLEY") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF TEXAS-RIO GRANDE VALLEY"
+    fuzzy_fixes$CI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF TEXAS AT AUSTIN") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF TEXAS-AUSTIN"
+    fuzzy_fixes$CI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "GEORGIA INSTITUTE OF TECHNOLOGY") {
+    fuzzy_fixes$New_CI[i] = "GEORGIA INSTITUTE OF TECHNOLOGY"
+    fuzzy_fixes$CI_State[i] = "GA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "TRUSTEES OF BOSTON UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "BOSTON UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "HARVARD COLLEGE, PRESIDENT  AND  FELLOWS OF") {
+    fuzzy_fixes$New_CI[i] = "HARVARD COLLEGE"
+    fuzzy_fixes$CI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF HAWAII") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF HAWAII"
+    fuzzy_fixes$CI_State[i] = "HI"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "WILLIAM MARSH RICE UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "RICE UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "TX"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "WASHINGTON UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "WASHINGTON UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "OHIO STATE UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "OHIO STATE UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "OH"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "TULANE UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "TULANE UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "LA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "CAMBRIDGE UNIVERSITY") {
+    fuzzy_fixes$New_CI[i] = "CAMBRIDGE UNIVERSITY"
+    fuzzy_fixes$CI_State[i] = "N/A"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "COLLEGE OF WILLIAM AND MARY") {
+    fuzzy_fixes$New_CI[i] = "COLLEGE OF WILLIAM AND MARY"
+    fuzzy_fixes$CI_State[i] = "VA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "UNIVERSITY OF VIRGINIA") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF VIRGINIA"
+    fuzzy_fixes$CI_State[i] = "VA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "NANJING ENGINEERING COLLEGE/CHINA") {
+    fuzzy_fixes$New_CI[i] = "NANJING ENGINEERING COLLEGE-CHINA"
+    fuzzy_fixes$CI_State[i] = "N/A"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "U OF CHICAGO/IL") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF CHICAGO"
+    fuzzy_fixes$CI_State[i] = "IL"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "U OF NOTRE DAME/IN") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF NOTRE DAME"
+    fuzzy_fixes$CI_State[i] = "IN"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "U OF TEXAS-AUSTIN") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF TEXAS-AUSTIN"
+    fuzzy_fixes$CI_State[i] = "OH"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "NSHE BOARD OF REGENTS ON BEHALF OF NEVADA STATE COLLEGE") {
+    fuzzy_fixes$New_CI[i] = "NEVADA STATE COLLEGE"
+    fuzzy_fixes$CI_State[i] = "NV"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "BOARD OF REGENTS, NSHE, OBO UNIVERSITY OF NEVADA, RENO") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF NEVADA"
+    fuzzy_fixes$CI_State[i] = "NV"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "U OF WASHINGTON") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF WASHINGTON"
+    fuzzy_fixes$CI_State[i] = "WA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "RADCLIFFE COLLEGE/MA") {
+    fuzzy_fixes$New_CI[i] = "RADCLIFFE COLLEGE"
+    fuzzy_fixes$CI_State[i] = "MA"
+  }
+  
+  if(fuzzy_fixes$Current_Institution[i] == "U OF UTAH") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF UTAH"
+    fuzzy_fixes$CI_State[i] = "UT"
+  }
+    
+  if(fuzzy_fixes$Current_Institution[i] == "ARIZONA, UNIVERSITY OF") {
+    fuzzy_fixes$New_CI[i] = "UNIVERSITY OF ARIZONA"
+    fuzzy_fixes$CI_State[i] = "AZ"
+  }
+  
+  }
+  }
+})
+```
+
+With that complete, our newly cleaned dataset was now saved to a final .csv. 
+
+```{r}
+# "Saving" progress again by now writing to a new csv
+write.csv(fuzzy_fixes, "nsf_fully_cleaned_12-1.csv", row.names=FALSE)
+```
+

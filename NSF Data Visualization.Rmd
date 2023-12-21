@@ -1,0 +1,210 @@
+---
+title: "NSF Graduate Research Fellowships Program (GFRP) Data Visualization"
+output: pdf_document
+author: "Natalie Sarabosing"
+date: "2023-12-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(maps)
+library(usdata)
+library(gifski)
+library(av)
+library(mapproj)
+library(gganimate)
+library(transformr)
+```
+
+### Author's Note: 
+This file is the second half of my work from the Fall 2023 Early Undergraduate Research in Statistics course (36-297). My goal with this .Rmd file was to create an animated time-series choropleth map of the cleaned NSF data (see the NSF Data Cleaning file). I wasn't quite able to successfully accomplish the animation by the end of the semester, but did manage to create the choropleth maps for Baccalaureate Institutions. The following file is less polished, and is essentially my exploration and debugging process. I would enthusiastically invite anyone to use this file as a jumping-off point to animate those Baccalaureate Institution maps, and to adapt the code to visualize the Current Institutions of grant awardees. Much of my code is based off of code from Professor Spencer Koerner's Statistical Graphics & Visualization course (36-315). 
+
+
+```{r}
+# Reading in the cleaned NSF dataset
+nsf_done <- read.csv("nsf_fully_cleaned_12-1.csv")
+
+# Reading in data for the choropleth map boundaries
+us_data <- map_data("state")
+county_data <- map_data("county")
+```
+
+
+```{r}
+# Graphing state boundaries
+state_borders <- map_data("state") 
+head(state_borders)
+state_borders %>%
+ggplot() + 
+    geom_polygon(aes(x = long, y = lat, group = group), color = "black") 
+```
+
+```{r}
+# Processing the NSF data to match the state data formats (i.e. abbreviated)
+nsf_done$BI_State_Full <- abbr2state(nsf_done$BI_State)
+nsf_done$BI_State_Full <- tolower(nsf_done$BI_State_Full)
+head(nsf_done)
+```
+
+```{r}
+# Processing state data
+state_names <- rownames(state.x77)
+state_data <- as_tibble(state.x77)
+state_data <- state_data %>%
+  mutate(state = state_names) %>%
+  mutate(state = tolower(state))
+
+# Making a copy of the state column 
+nsf_done$state <- nsf_done$BI_State_Full
+head(nsf_done$state)
+```
+
+```{r}
+# Preprocessing the NSF data again to try and reoganize by year for animation
+nsf2023 <- subset(nsf_done, Year == 2023, select = c(Year, state))
+df2023 <- as.data.frame(table(nsf2023$state))
+df2023$state <- df2023$Var1
+
+# Making a dataset based on the NSF frequency data of how many grant awardees came from institutions in any given state
+df_states = data.frame(matrix(NA, nrow = 1, ncol = 3))
+df_states <- df_states %>% 
+        rename("year" = "X1",
+               "state" = "X2",
+               "freq" = "X3") 
+                  # This is the number of awardees that came from a school in that state in that year
+
+nsftemp <- subset(nsf_done, Year != 6, select = c(Year, state))
+  
+for(i in 0:53) { 
+   nsftemp <- subset(nsf_done, Year == 2023-i,å select = c(Year, state))
+   df_temp <- as.data.frame(table(nsftemp$state))
+   df_temp <- df_temp %>%
+        rename("state" = "Var1",
+               "freq" = "Freq")
+   df_temp$year <- 2023-i
+   df_states <- bind_rows(df_states, df_temp)
+}
+df_states <- df_states[-1,]
+head(df_states)
+```
+
+```{r}
+# Creating a copy of the previous frequency dataset to work with
+state_plot_data2 <- df_states
+
+# Attempting to format the year as a date
+state_plot_data2 <- df_states %>%
+  mutate(year = as.Date(year, format = "%Y"))
+```
+
+```{r}
+# Join state_data data to state_borders
+state_plot_data <- state_borders %>%
+  left_join(df_states, #<<
+            by = c("region" = "state"))
+```
+
+
+```{r}
+# Attempt 1 at making a choropleth map
+state_plot_data %>%
+ggplot() + 
+    geom_polygon(aes(x = long, y = lat, group = group, fill = freq), color = "black") + 
+    scale_fill_gradient2(low = "#d9f0a3", mid = "#78c679", 
+                         high = "#00441b", midpoint = median) +
+    theme_void() +
+    coord_map("polyconic") + 
+    labs(
+      title = "NSF GFRP Awardees by State",
+      subtitle = 2023-i,
+      caption = "National Science Foundation",
+      fill = "Frequency"
+    ) +
+    theme(legend.position = "bottom")
+```
+
+
+
+```{r, message = FALSE, warning = FALSE}
+# Trying to use gganimate to create the choropleth maps
+
+myPlot <- ggplot(state_plot_data) + 
+  geom_polygon(aes(x = long, y = lat, group = group, fill = freq), color = "black") + 
+  scale_fill_gradient2(low = "#d9f0a3", mid = "#78c679", 
+                       high = "#00441b", midpoint = 30) +
+  theme_void() +
+  coord_map("polyconic") + 
+  transition_states(year,
+                    transition_length = 0.5,
+                    state_length = 1) +
+  labs(
+    title = "NSF GFRP Awardees by State",
+    subtitle = year,
+    caption = "National Science Foundation",
+    fill = "Frequency"
+  ) +
+  theme(legend.position = "bottom")
+
+```
+
+```{r}
+animate(myPlot, fps = 10, renderer = gifski_renderer())
+anim_save("output2.gif")
+```
+
+
+```{r}
+# Giving up on gganimate for now
+state_plot_data <- subset(state_plot_data, year >= 1970, select = c(long, lat, group, order, region, year, freq))
+```
+
+```{r}
+# Attempt 2: Using a for loop (unsuccessful)
+plot1 = NA
+for(i in 0:0) { # will be to 68
+  state_plot_temp <- subset(state_plot_data, year == 2023-i, select = c(long, lat, group, order, region, year, freq))
+  
+  plot <- ggplot(state_plot_temp) + 
+    geom_polygon(aes(x = long, y = lat, group = group, fill = freq), color = "black") + 
+    scale_fill_gradient2(low = "#d9f0a3", mid = "#78c679", 
+                         high = "#00441b", midpoint = median) +
+    theme_void() +
+    coord_map("polyconic") + 
+    labs(
+      title = "NSF GFRP Awardees by State",
+      subtitle = 2023-i,
+      caption = "National Science Foundation",
+      fill = "Frequency"
+    ) +
+    theme(legend.position = "bottom")
+  plot1 = plot
+}
+plot1
+```
+
+
+```{r}
+# Attempt 3: Simply generating choropleth maps by year
+state_plot <- subset(state_plot_data, year == 2023, select = c(long, lat, group, order, region, year, freq))
+
+ggplot(state_plot) + 
+  geom_polygon(aes(x = long, y = lat, group = group, fill = freq), color = "black") + 
+  scale_fill_gradient2(low = "#d9f0a3", mid = "#78c679", 
+                       high = "#00441b", midpoint = 250) +
+  theme_void() +
+  coord_map("polyconic") + 
+  labs(
+    title = "NSF GFRP Awardees by State",
+    subtitle = 2023,
+    caption = "National Science Foundation",
+    fill = "Frequency"
+  ) +
+  theme(legend.position = "bottom")
+
+
+# Code for exporting the map as a .png:
+# png(file=paste(2023,".png",sep=""), width = 600, height = 400)
+# myPlot
+```
